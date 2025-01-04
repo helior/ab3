@@ -1,5 +1,20 @@
 # Welcome to your CDK TypeScript project
 
+```sh
+# invoke initialize lambda to for imageUploadID
+curl -X POST https://fk7aox814f.execute-api.us-east-1.amazonaws.com/prod/initialize \
+-H "Content-Type: application/json" \
+-d '{"name": "helior.txt"}'
+
+# Deploy via CDK
+cdk deploy --context env="one" --context whitelistip="76.33.137.141"
+
+# Destroy
+cdk destroy
+```
+
+
+---
 This is a blank project for CDK development with TypeScript.
 
 The `cdk.json` file tells the CDK Toolkit how to execute your app.
@@ -12,3 +27,5 @@ The `cdk.json` file tells the CDK Toolkit how to execute your app.
 * `npx cdk deploy`  deploy this stack to your default AWS account/region
 * `npx cdk diff`    compare deployed stack with current state
 * `npx cdk synth`   emits the synthesized CloudFormation template
+
+cdk deploy --context env="one" --context whitelistip="76.33.137.141"
