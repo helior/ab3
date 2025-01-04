@@ -1,12 +1,16 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as apigw from 'aws-cdk-lib/aws-apigateway';
+import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
-import * as iam from "aws-cdk-lib/aws-iam"
-import * as s3 from "aws-cdk-lib/aws-s3";
+import * as iam from 'aws-cdk-lib/aws-iam'
+import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
+import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import { BucketEncryption } from 'aws-cdk-lib/aws-s3';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Runtime } from 'aws-cdk-lib/aws-lambda';
@@ -56,6 +60,34 @@ export class Ab3Stack extends cdk.Stack {
       runtime: Runtime.NODEJS_18_X,
     };
 
+
+/**
+ * Parameter Store
+ */
+    new ssm.StringParameter(this, 'MobileDeviceMapping', {
+      parameterName: '/image-processor/device-mappings/mobile',
+      stringValue: JSON.stringify({ width: 640, height: 960 }),
+    });
+
+    new ssm.StringParameter(this, 'TabletDeviceMapping', {
+      parameterName: '/image-processor/device-mappings/tablet',
+      stringValue: JSON.stringify({ width: 1024, height: 1366 }),
+    });
+
+    new ssm.StringParameter(this, 'DesktopDeviceMapping', {
+      parameterName: '/image-processor/device-mappings/desktop',
+      stringValue: JSON.stringify({ width: 1920, height: 1080 }),
+    });
+
+    new ssm.StringParameter(this, 'TimestampConfig', {
+      parameterName: '/image-processor/timestamp-config',
+      stringValue: JSON.stringify({
+        font: 'Arial',
+        fontSize: 24,
+        rgba: true,
+      }),
+    });
+
     /**
      * S3
      */
@@ -86,6 +118,101 @@ export class Ab3Stack extends cdk.Stack {
       }],
       removalPolicy: cdk.RemovalPolicy.DESTROY
     });
+
+    /**
+     * Web Application Firewall
+     */
+    const webAcl = new wafv2.CfnWebACL(this, 'ImageCdnWebAcl', {
+      defaultAction: { allow: {} },
+      scope: 'CLOUDFRONT',
+      visibilityConfig: {
+        cloudWatchMetricsEnabled: true,
+        metricName: 'ImageCdnWebAclMetric',
+        sampledRequestsEnabled: true,
+      },
+      rules: [
+        {
+          name: 'RateLimit',
+          priority: 1,
+          action: { block: {} },
+          statement: {
+            rateBasedStatement: {
+              limit: 2000,
+              aggregateKeyType: 'IP',
+            },
+          },
+          visibilityConfig: {
+            cloudWatchMetricsEnabled: true,
+            metricName: 'RateLimitRule',
+            sampledRequestsEnabled: true,
+          },
+        },
+        {
+          name: 'AWSManagedRulesCommonRuleSet',
+          priority: 2,
+          overrideAction: { none: {} },
+          statement: {
+            managedRuleGroupStatement: {
+              vendorName: 'AWS',
+              name: 'AWSManagedRulesCommonRuleSet',
+            },
+          },
+          visibilityConfig: {
+            cloudWatchMetricsEnabled: true,
+            metricName: 'AWSManagedRulesCommonRuleSetMetric',
+            sampledRequestsEnabled: true,
+          },
+        },
+      ],
+    });
+
+    /**
+     * CloudFront
+     */
+    // Create Origin Access Identity for CloudFront
+    const oai = new cloudfront.OriginAccessIdentity(this, 'CloudFrontOAI');
+    originalS3Bucket.grantRead(oai);
+
+    // Create CloudFront distribution
+    const distribution = new cloudfront.Distribution(this, 'ImageDistribution', {
+      defaultBehavior: {
+        origin: new origins.S3Origin(originalS3Bucket, {
+          originAccessIdentity: oai,
+        }),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+        cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD,
+        cachePolicy: new cloudfront.CachePolicy(this, 'ImageCachePolicy', {
+          defaultTtl: cdk.Duration.minutes(1),
+          minTtl: cdk.Duration.seconds(1),
+          maxTtl: cdk.Duration.minutes(5),
+          headerBehavior: cloudfront.CacheHeaderBehavior.allowList(
+            'CloudFront-Is-Mobile-Viewer',
+            'CloudFront-Is-Tablet-Viewer',
+            'CloudFront-Is-Desktop-Viewer'
+          ),
+          enableAcceptEncodingGzip: true,
+          enableAcceptEncodingBrotli: true,
+        }),
+        originRequestPolicy: new cloudfront.OriginRequestPolicy(this, 'DeviceAwarePolicy', {
+          headerBehavior: cloudfront.OriginRequestHeaderBehavior.allowList(
+            'CloudFront-Is-Mobile-Viewer',
+            'CloudFront-Is-Tablet-Viewer',
+            'CloudFront-Is-Desktop-Viewer'
+          ),
+        }),
+      },
+      priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
+      enableIpv6: true,
+      webAclId: webAcl.attrArn,
+    });
+
+    // Output the CloudFront URL
+    new cdk.CfnOutput(this, 'DistributionUrl', {
+      value: `https://${distribution.distributionDomainName}`,
+      description: 'CloudFront Distribution URL',
+    });
+
 
 
     /**
