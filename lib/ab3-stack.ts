@@ -4,9 +4,10 @@ import * as apigw from 'aws-cdk-lib/aws-apigateway';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam'
-import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+// import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
+import * as s3objectlambda from 'aws-cdk-lib/aws-s3objectlambda';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
@@ -21,49 +22,17 @@ export class Ab3Stack extends cdk.Stack {
     super(scope, id, props);
 
     /**
-     * Setup
+     * Arguments
      */
     const env = cdk.Stack.of(this).node.tryGetContext('env') ?? 'default';
     const expires = cdk.Stack.of(this).node.tryGetContext('urlExpiry') ?? '300';
     const timeout = Number(cdk.Stack.of(this).node.tryGetContext('functionTimeout') ?? '3');
     const whitelistedIps = [cdk.Stack.of(this).node.tryGetContext('whitelistip')]
 
-    const apiResourcePolicy = new iam.PolicyDocument({
-      statements: [
-        new iam.PolicyStatement({
-          actions: ['execute-api:Invoke'],
-          principals: [new iam.AnyPrincipal()],
-          resources: ['execute-api:/*/*/*'],
-        }),
-        new iam.PolicyStatement({
-          effect: iam.Effect.DENY,
-          principals: [new iam.AnyPrincipal()],
-          actions: ['execute-api:Invoke'],
-          resources: ['execute-api:/*/*/*'],
-          conditions: {
-            'NotIpAddress': {
-              "aws:SourceIp": whitelistedIps
-            }
-          }
-        })
-      ]
-    })
 
-    const commonNodeJsProps = {
-      bundling: {
-        externalModules: [
-          'aws-sdk',
-          '@aws-sdk/client-s3',
-          '@aws-sdk/s3-request-presigner',
-        ],
-      },
-      runtime: Runtime.NODEJS_18_X,
-    };
-
-
-/**
- * Parameter Store
- */
+    /**
+     * Parameter Store
+     */
     new ssm.StringParameter(this, 'MobileDeviceMapping', {
       parameterName: '/image-processor/device-mappings/mobile',
       stringValue: JSON.stringify({ width: 640, height: 960 }),
@@ -88,36 +57,6 @@ export class Ab3Stack extends cdk.Stack {
       }),
     });
 
-    /**
-     * S3
-     */
-    const originalS3Bucket = new s3.Bucket(this, "original-s3-bucket", {
-      bucketName: `original-${env}`,
-      lifecycleRules: [{
-        expiration: cdk.Duration.days(10),
-        abortIncompleteMultipartUploadAfter: cdk.Duration.days(1),
-      }],
-    blockPublicAccess: {
-        blockPublicAcls: true,
-        blockPublicPolicy: true,
-        ignorePublicAcls: true,
-        restrictPublicBuckets: true,
-      },
-      encryption: BucketEncryption.S3_MANAGED,
-      enforceSSL: true,
-      transferAcceleration: true,
-      cors: [{
-        allowedOrigins: ["*"],
-        allowedHeaders: ["*"],
-        allowedMethods: [
-          s3.HttpMethods.GET,
-          s3.HttpMethods.PUT,
-          s3.HttpMethods.POST,
-        ],
-        exposedHeaders: ['ETag'],
-      }],
-      removalPolicy: cdk.RemovalPolicy.DESTROY
-    });
 
     /**
      * Web Application Firewall
@@ -166,53 +105,118 @@ export class Ab3Stack extends cdk.Stack {
       ],
     });
 
+
+    /**
+     * S3
+     */
+    const originalS3Bucket = new s3.Bucket(this, "original-s3-bucket", {
+      bucketName: `original-${env}`,
+      lifecycleRules: [{
+        expiration: cdk.Duration.days(10),
+        abortIncompleteMultipartUploadAfter: cdk.Duration.days(1),
+      }],
+      blockPublicAccess: {
+        blockPublicAcls: true,
+        blockPublicPolicy: true,
+        ignorePublicAcls: true,
+        restrictPublicBuckets: true,
+      },
+      encryption: BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      transferAcceleration: true,
+      cors: [{
+        allowedOrigins: ["*"],
+        allowedHeaders: ["*"],
+        allowedMethods: [
+          s3.HttpMethods.GET,
+          s3.HttpMethods.PUT,
+          s3.HttpMethods.POST,
+        ],
+        exposedHeaders: ['ETag'],
+      }],
+      removalPolicy: cdk.RemovalPolicy.DESTROY
+    });
+
+    // // Access point for original S3
+    // const accessPoint = new s3.CfnAccessPoint(this, 'OriginalS3BucketAP', {
+    //   bucket: originalS3Bucket.bucketName,
+    //   name: 'original-ap',
+    // });
+
+
+
+
     /**
      * CloudFront
      */
-    // Create Origin Access Identity for CloudFront
-    const oai = new cloudfront.OriginAccessIdentity(this, 'CloudFrontOAI');
-    originalS3Bucket.grantRead(oai);
-
-    // Create CloudFront distribution
-    const distribution = new cloudfront.Distribution(this, 'ImageDistribution', {
-      defaultBehavior: {
-        origin: new origins.S3Origin(originalS3Bucket, {
-          originAccessIdentity: oai,
-        }),
-        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
-        cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD,
-        cachePolicy: new cloudfront.CachePolicy(this, 'ImageCachePolicy', {
-          defaultTtl: cdk.Duration.minutes(1),
-          minTtl: cdk.Duration.seconds(1),
-          maxTtl: cdk.Duration.minutes(5),
-          headerBehavior: cloudfront.CacheHeaderBehavior.allowList(
-            'CloudFront-Is-Mobile-Viewer',
-            'CloudFront-Is-Tablet-Viewer',
-            'CloudFront-Is-Desktop-Viewer'
-          ),
-          enableAcceptEncodingGzip: true,
-          enableAcceptEncodingBrotli: true,
-        }),
-        originRequestPolicy: new cloudfront.OriginRequestPolicy(this, 'DeviceAwarePolicy', {
-          headerBehavior: cloudfront.OriginRequestHeaderBehavior.allowList(
-            'CloudFront-Is-Mobile-Viewer',
-            'CloudFront-Is-Tablet-Viewer',
-            'CloudFront-Is-Desktop-Viewer'
-          ),
-        }),
-      },
-      priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
-      enableIpv6: true,
-      webAclId: webAcl.attrArn,
+    // Create Origin Access Control
+    const oac = new cloudfront.CfnOriginAccessControl(this, 'OriginAccessControl', {
+      originAccessControlConfig: {
+        name: 'ImageBucketOAC',
+        originAccessControlOriginType: 's3',
+        signingBehavior: 'always',
+        signingProtocol: 'sigv4'
+      }
     });
+    // Create CloudFront distribution
+    const distribution = new cloudfront.CfnDistribution(this, 'ImageDistribution', {
+      distributionConfig: {
+        enabled: true,
+        defaultCacheBehavior: {
+          targetOriginId: 'S3Origin',
+          viewerProtocolPolicy: 'redirect-to-https',
+          allowedMethods: ['GET', 'HEAD'],
+          cachedMethods: ['GET', 'HEAD'],
+          forwardedValues: {
+            queryString: false,
+            headers: [
+              'CloudFront-Is-Mobile-Viewer',
+              'CloudFront-Is-Tablet-Viewer',
+              'CloudFront-Is-Desktop-Viewer'
+            ],
+            cookies: {
+              forward: 'none'
+            }
+          },
+          minTtl: 1,
+          defaultTtl: 60,
+          maxTtl: 300,
+          compress: true,
+        },
+        origins: [{
+          id: 'S3Origin',
+          domainName: `${originalS3Bucket.bucketName}.s3.${this.region}.amazonaws.com`,
+          originAccessControlId: oac.attrId,
+          s3OriginConfig: {
+            originAccessIdentity: '' // Required for OAC
+          }
+        }],
+        priceClass: 'PriceClass_100',
+        ipv6Enabled: true,
+        webAclId: webAcl.attrArn,
+      }
+    });
+
+    // Update bucket policy with explicit OAC reference
+    const bucketPolicyStatement = new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['s3:GetObject'],
+      principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
+      resources: [`${originalS3Bucket.bucketArn}/*`],
+      conditions: {
+        StringEquals: {
+          'AWS:SourceArn': `arn:aws:cloudfront::${this.account}:distribution/${distribution.attrId}`
+        }
+      }
+    });
+
+    originalS3Bucket.addToResourcePolicy(bucketPolicyStatement);
 
     // Output the CloudFront URL
     new cdk.CfnOutput(this, 'DistributionUrl', {
-      value: `https://${distribution.distributionDomainName}`,
+      value: distribution.attrDomainName,
       description: 'CloudFront Distribution URL',
     });
-
 
 
     /**
@@ -234,6 +238,19 @@ export class Ab3Stack extends cdk.Stack {
     /**
      * Lambda
      */
+    const commonNodeJsProps = {
+      bundling: {
+        externalModules: [
+          'aws-sdk',
+          '@aws-sdk/client-s3',
+          '@aws-sdk/s3-request-presigner',
+          'sharp'
+        ],
+      },
+      runtime: Runtime.NODEJS_18_X,
+    };
+
+    // Initialize Multi-part upload
     const initializeLambda = new NodejsFunction(this, 'initializeHandler', {
       ...commonNodeJsProps,
       entry: join(__dirname, '../lambda/initialize.js'),
@@ -242,7 +259,9 @@ export class Ab3Stack extends cdk.Stack {
       },
       functionName: `multipart-upload-initialize-${env}`
     });
+    originalS3Bucket.grantReadWrite(initializeLambda);
 
+    // Get Presigned URLs
     const getPreSignedUrlsLambda = new NodejsFunction(this, 'getPreSignedUrlsHandler', {
       ...commonNodeJsProps,
       entry: join(__dirname, '../lambda/getPreSignedUrls.js'),
@@ -253,7 +272,9 @@ export class Ab3Stack extends cdk.Stack {
       functionName: `multipart-upload-getPreSignedUrls-${env}`,
       timeout: cdk.Duration.seconds(timeout)
     });
+    originalS3Bucket.grantReadWrite(getPreSignedUrlsLambda);
 
+    // Get Presigned URLs for Transfer Accelerator
     const getPreSignedTAUrlsLambda = new NodejsFunction(this, 'getPreSignedTAUrlsHandler', {
       ...commonNodeJsProps,
       entry: join(__dirname, '../lambda/getPreSignedTAUrls.js'),
@@ -264,7 +285,9 @@ export class Ab3Stack extends cdk.Stack {
       functionName: `multipart-upload-getPreSignedTAUrls-${env}`,
       timeout: cdk.Duration.seconds(timeout)
     });
+    originalS3Bucket.grantReadWrite(getPreSignedTAUrlsLambda);
 
+    // Finalize multi-part upload
     const finalizeLambda = new NodejsFunction(this, 'finalizeHandler', {
       ...commonNodeJsProps,
       entry: join(__dirname, '../lambda/finalize.js'),
@@ -273,7 +296,9 @@ export class Ab3Stack extends cdk.Stack {
       },
       functionName: `multipart-upload-finalize-${env}`
     });
+    originalS3Bucket.grantReadWrite(finalizeLambda);
 
+    // Fetch all records by Owner
     const getImagesByOwnerLambda = new NodejsFunction(this, 'getImagesByOwnerHandler', {
       ...commonNodeJsProps,
       entry: join(__dirname, '../lambda/getImagesByOwner.js'),
@@ -283,7 +308,9 @@ export class Ab3Stack extends cdk.Stack {
       },
       functionName: `get-images-by-owner-${env}`
     });
+    imageTable.grantReadWriteData(getImagesByOwnerLambda);  //previously grantFullAccess()
 
+    // Fixme: initialize image preprocessing via S3 PUT event
     const initializeProcessingLambda = new NodejsFunction(this, 'initializeProcessingHandler', {
       ...commonNodeJsProps,
       entry: join(__dirname, '../lambda/initializeProcessing.js'),
@@ -293,7 +320,44 @@ export class Ab3Stack extends cdk.Stack {
       },
       functionName: `initialize-processing-${env}`
     });
+    imageTable.grantReadWriteData(initializeProcessingLambda);
+    // S3 Event: PUT
+    originalS3Bucket.addEventNotification(
+      s3.EventType.OBJECT_CREATED_PUT,
+      new s3n.LambdaDestination(initializeProcessingLambda)
+    );
 
+    // const dynamicRequestTransformationLambda = new NodejsFunction(this, 'dynamicRequestTransformationHandler', {
+    //   ...commonNodeJsProps,
+    //   entry: join(__dirname, '../lambda/dynamicRequestTransformation.js'),
+    //   memorySize: 1024,
+    //   timeout: cdk.Duration.seconds(30),
+    //   environment: {
+    //     BUCKET_NAME: originalS3Bucket.bucketName,
+    //     PARAMETER_PATH: '/image-processor/'
+    //   },
+    //   functionName: `dynamic-request-transformation-${env}`
+    // });
+
+
+    // /**
+    //  * S3 Object Lambda Access Point
+    //  */
+    // // Dynamic Transformation
+    // const objectLambdaAP = new s3objectlambda.CfnAccessPoint(this, 'ImageProcessorAP', {
+    //   name: 'image-processor-ap',
+    //   objectLambdaConfiguration: {
+    //     supportingAccessPoint: accessPoint.attrArn,
+    //     transformationConfigurations: [{
+    //       actions: ['GetObject'],
+    //       contentTransformation: {
+    //         AwsLambda: {
+    //           FunctionArn: dynamicRequestTransformationLambda.functionArn,
+    //         },
+    //       },
+    //     }],
+    //   },
+    // });
 
     /**
      * Step-Function / tasks
@@ -329,6 +393,7 @@ export class Ab3Stack extends cdk.Stack {
       iamResources: ['*'],
       resultPath: '$.moderationResults',
     });
+    originalS3Bucket.grantRead(new iam.ServicePrincipal('rekognition.amazonaws.com'));
 
     // Task: Update DynamoDB with rejection
     const updateStatusRejected = new tasks.DynamoUpdateItem(this, 'UpdateStatusRejected', {
@@ -382,23 +447,42 @@ export class Ab3Stack extends cdk.Stack {
         .next(detectModerationLabels)
         .next(moderationChoice),
     });
-
+    stateMachine.grantStartExecution(initializeProcessingLambda);
     initializeProcessingLambda.addEnvironment('STATE_MACHINE_ARN', stateMachine.stateMachineArn);
 
-    /**
-     * Grant access
-     */
-    originalS3Bucket.grantReadWrite(initializeLambda);
-    originalS3Bucket.grantReadWrite(getPreSignedUrlsLambda);
-    originalS3Bucket.grantReadWrite(getPreSignedTAUrlsLambda);
-    originalS3Bucket.grantReadWrite(finalizeLambda);
-    imageTable.grantReadWriteData(getImagesByOwnerLambda);  //previously grantFullAccess()
-    imageTable.grantReadWriteData(initializeProcessingLambda);
-    stateMachine.grantStartExecution(initializeProcessingLambda);
+
+
+    // dynamicRequestTransformationLambda.addToRolePolicy(new iam.PolicyStatement({
+    //   actions: ['ssm:GetParameter', 'ssm:GetParameters'],
+    //   resources: [
+    //     `arn:aws:ssm:${this.region}:${this.account}:parameter/image-processor/*`,
+    //   ],
+    // }));
 
     /**
      * API Gateway
      */
+    const apiResourcePolicy = new iam.PolicyDocument({
+      statements: [
+        new iam.PolicyStatement({
+          actions: ['execute-api:Invoke'],
+          principals: [new iam.AnyPrincipal()],
+          resources: ['execute-api:/*/*/*'],
+        }),
+        new iam.PolicyStatement({
+          effect: iam.Effect.DENY,
+          principals: [new iam.AnyPrincipal()],
+          actions: ['execute-api:Invoke'],
+          resources: ['execute-api:/*/*/*'],
+          conditions: {
+            'NotIpAddress': {
+              "aws:SourceIp": whitelistedIps
+            }
+          }
+        })
+      ]
+    })
+
     const apiGateway = new apigw.RestApi(this, 'image-processing', {
       description: 'API for image processing',
       restApiName: 'image-processing',
@@ -427,16 +511,5 @@ export class Ab3Stack extends cdk.Stack {
       },
     });
 
-
-    /**
-     * S3 Event Trigger
-     */
-    originalS3Bucket.addEventNotification(
-      s3.EventType.OBJECT_CREATED_PUT,
-      new s3n.LambdaDestination(initializeProcessingLambda)
-    );
-
-    // Grant S3 read permissions to Rekognition
-    originalS3Bucket.grantRead(new iam.ServicePrincipal('rekognition.amazonaws.com'));
   }
 }

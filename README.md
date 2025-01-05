@@ -7,12 +7,14 @@ curl -X POST https://fk7aox814f.execute-api.us-east-1.amazonaws.com/prod/initial
 -d '{"name": "helior.txt"}'
 
 # Deploy via CDK
-cdk deploy --context env="one" --context whitelistip="76.33.137.141"
+cdk deploy --context env="one" --context urlExpiry="900" --context whitelistip="76.33.137.141"
 
 # Destroy
 cdk destroy
 ```
-
+---
+#### Outputs
+https://d1lm51n3xl8g8m.cloudfront.net
 
 ---
 This is a blank project for CDK development with TypeScript.
