@@ -8,7 +8,7 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
-// import * as s3objectlambda from 'aws-cdk-lib/aws-s3objectlambda';
+import * as s3objectlambda from 'aws-cdk-lib/aws-s3objectlambda';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
@@ -139,6 +139,12 @@ export class Ab3Stack extends cdk.Stack {
       }],
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       versioned: true
+    });
+
+    // Access point for original S3
+    const s3AccessPoint = new s3.CfnAccessPoint(this, 'OriginalS3BucketAP', {
+      bucket: originalS3Bucket.bucketName,
+      name: 'original-ap',
     });
 
 
@@ -348,6 +354,25 @@ export class Ab3Stack extends cdk.Stack {
         `arn:aws:ssm:${this.region}:${this.account}:parameter/image-processor/*`,
       ],
     }));
+
+    /**
+     * S3 Object Lambda Access Point
+     */
+    // Dynamic Transformation
+    const objectLambdaAP = new s3objectlambda.CfnAccessPoint(this, 'ImageProcessorAP', {
+      name: 'image-processor-ap',
+      objectLambdaConfiguration: {
+        supportingAccessPoint: s3AccessPoint.attrArn,
+        transformationConfigurations: [{
+          actions: ['GetObject'],
+          contentTransformation: {
+            AwsLambda: {
+              FunctionArn: dynamicRequestTransformationLambda.functionArn,
+            },
+          },
+        }],
+      },
+    });
 
     // const dynamicRequestTransformationLambda = new NodejsFunction(this, 'dynamicRequestTransformationHandler', {
     //   ...commonNodeJsProps,

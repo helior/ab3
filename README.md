@@ -1,5 +1,5 @@
 # Welcome to your CDK TypeScript project
-
+👋🏼 
 ```sh
 # invoke initialize lambda to for imageUploadID
 curl -X POST https://1cbh6il1lh.execute-api.us-east-1.amazonaws.com/prod/initialize \
