@@ -297,11 +297,11 @@ export class Ab3Stack extends cdk.Stack {
       new s3n.LambdaDestination(initializeProcessingLambda)
     )
 
-    const sharpLayer = new lambda.LayerVersion(this, "SharpLayer", {
-      code: lambda.Code.fromAsset(path.join(__dirname, "../layers/sharp-layer/nodejs")),
-      compatibleRuntimes: [lambda.Runtime.NODEJS_18_X],
-      description: "A layer that includes the sharp library",
-    });
+    // const sharpLayer = new lambda.LayerVersion(this, "SharpLayer", {
+    //   code: lambda.Code.fromAsset(path.join(__dirname, "../layers")),
+    //   compatibleRuntimes: [lambda.Runtime.NODEJS_18_X],
+    //   description: "A layer that includes the sharp library",
+    // });
 
     const dynamicRequestTransformationLambda = new NodejsFunction(this, 'dynamicRequestTransformationHandler', {
 
@@ -515,6 +515,7 @@ export class Ab3Stack extends cdk.Stack {
       expressionAttributeValues: {
         ':status': tasks.DynamoAttributeValue.fromString('init processing'),
       },
+      resultPath: '$.recordMeta'
     });
 
     // Task: Content moderation (using Rekognition)
