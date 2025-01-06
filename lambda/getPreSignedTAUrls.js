@@ -5,6 +5,9 @@ const URL_EXPIRES = process.env['URL_EXPIRES'];
 
 const s3 = new S3Client({useAccelerateEndpoint: true});
 
+
+
+
 exports.handler = async (event) => {
 	console.log(event);
 	if (event.body !== null && event.body !== undefined) {
