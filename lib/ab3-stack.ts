@@ -30,7 +30,7 @@ export class Ab3Stack extends cdk.Stack {
     const env = cdk.Stack.of(this).node.tryGetContext('env') ?? 'default';
     const expires = cdk.Stack.of(this).node.tryGetContext('urlExpiry') ?? '300';
     const timeout = Number(cdk.Stack.of(this).node.tryGetContext('functionTimeout') ?? '3');
-    const whitelistedIps = [cdk.Stack.of(this).node.tryGetContext('whitelistip')]
+    const whitelistedIps = cdk.Stack.of(this).node.tryGetContext('whitelistip').split(',')
 
 
     /**
@@ -297,7 +297,7 @@ export class Ab3Stack extends cdk.Stack {
       functionName: `initialize-processing-${env}`
     });
     imageTable.grantReadWriteData(initializeProcessingLambda);
-    // S3 Event: s3:ObjectCreated:*
+
     originalS3Bucket.addEventNotification(
       s3.EventType.OBJECT_CREATED,
       new s3n.LambdaDestination(initializeProcessingLambda)
@@ -327,15 +327,6 @@ export class Ab3Stack extends cdk.Stack {
       //   },
       // },
 
-      // bundling: {
-      //   command: [
-      //     'bash', '-c',
-      //     'npm install && ' +
-      //     'npm install --cpu=x64 --os=linux sharp && ' +
-      //     'cp -r /asset-input/* /asset-output/'
-      //   ],
-      // },
-
       runtime: Runtime.NODEJS_18_X,
       entry: join(__dirname, '../lambda/dynamicRequestTransformation.js'),
       memorySize: 1024,
@@ -348,11 +339,28 @@ export class Ab3Stack extends cdk.Stack {
     });
 
     originalS3Bucket.grantRead(dynamicRequestTransformationLambda);
+    
     dynamicRequestTransformationLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: ['ssm:GetParameter', 'ssm:GetParameters'],
-      resources: [
-        `arn:aws:ssm:${this.region}:${this.account}:parameter/image-processor/*`,
-      ],
+      resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/image-processor/*`],
+    }));
+
+
+    // Create the Lambda function using NodejsFunction
+    const dynamicS3GetLambda = new NodejsFunction(this, 'DynamicS3GetHandler', {
+      runtime: Runtime.NODEJS_18_X,
+      entry: join(__dirname, '../lambda/dynamicS3Get.js'),
+      functionName: `dynamic-s3-get-${env}`,
+      memorySize: 1024,
+      timeout: cdk.Duration.seconds(30),
+      environment: {
+        BUCKET_NAME: originalS3Bucket.bucketName,
+      },
+    });
+    originalS3Bucket.grantRead(dynamicS3GetLambda);
+    dynamicS3GetLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['s3-object-lambda:WriteGetObjectResponse'],
+      resources: ['*'],
     }));
 
     /**
@@ -367,12 +375,56 @@ export class Ab3Stack extends cdk.Stack {
           actions: ['GetObject'],
           contentTransformation: {
             AwsLambda: {
-              FunctionArn: dynamicRequestTransformationLambda.functionArn,
+              FunctionArn: dynamicS3GetLambda.functionArn,
             },
           },
         }],
       },
     });
+
+
+    const getPresignedImageURLLambda = new NodejsFunction(this, 'GetPresignedImageURLHandler', {
+      runtime: Runtime.NODEJS_18_X,
+      entry: path.join(__dirname, '../lambda/getPresignedImageURL.js'),
+      functionName: `get-presigned-image-url-${env}`,
+      environment: {
+        OLAP_ALIAS: objectLambdaAP.attrAliasValue,
+      },
+    });
+
+    // getPresignedImageURLLambda.addToRolePolicy(new iam.PolicyStatement({
+    //   actions: [
+    //     's3:GetObject',
+    //     'lambda:InvokeFunction',
+    //     // 's3-object-lambda:GetObject',
+    //     // 's3:ListBucket',
+    //     // 's3-control:*'
+    //   ],
+    //   resources: [
+    //     `${objectLambdaAP.attrArn}/*`,
+    //     objectLambdaAP.attrArn,
+    //     // `${originalS3Bucket.bucketArn}/*`,
+    //     // originalS3Bucket.bucketArn,
+    //     // `arn:aws:s3:${this.region}:${this.account}:accesspoint/*`,
+    //     // `arn:aws:s3-control:${this.region}:${this.account}:accesspoint/*`
+    //     ],
+    // }));
+
+    // Grant presign function permissions for S3 and Lambda invocation
+    getPresignedImageURLLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: [
+        's3:GetObject'
+      ],
+      resources: [`${objectLambdaAP.attrArn}/*`]
+    }));
+
+    getPresignedImageURLLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: [
+        'lambda:InvokeFunction'
+      ],
+      resources: [dynamicS3GetLambda.functionArn]
+    }));
+
 
     // const dynamicRequestTransformationLambda = new NodejsFunction(this, 'dynamicRequestTransformationHandler', {
     //   ...commonNodeJsProps,
@@ -668,7 +720,8 @@ export class Ab3Stack extends cdk.Stack {
     apiGateway.root.addResource('getPreSignedTAUrls').addMethod('POST', new apigw.LambdaIntegration(getPreSignedTAUrlsLambda));
     apiGateway.root.addResource('finalize').addMethod('POST', new apigw.LambdaIntegration(finalizeLambda));
     apiGateway.root.addResource('images').addResource('{ownerId}').addMethod('GET', new apigw.LambdaIntegration(getImagesByOwnerLambda));
-    apiGateway.root.addResource('getImage').addResource('{S3ObjectKey}').addMethod('GET', new apigw.LambdaIntegration(dynamicRequestTransformationLambda));
+    apiGateway.root.addResource('getPresignedImageUrl').addResource('{S3ObjectKey}').addMethod('GET', new apigw.LambdaIntegration(getPresignedImageURLLambda));
+    // apiGateway.root.addResource('getImage').addResource('{S3ObjectKey}').addMethod('GET', new apigw.LambdaIntegration(dynamicRequestTransformationLambda));
 
     apiGateway.addUsagePlan('usage-plan', {
       name: 'consumerA-multi-part-upload-plan',
@@ -684,19 +737,35 @@ export class Ab3Stack extends cdk.Stack {
     });
 
 
-    const distribution = new cloudfront.Distribution(this, "ImageDistribution", {
-      defaultBehavior: {
-        origin: new origins.HttpOrigin(apiGateway.url.split('/')[2]),
-        allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
-        cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
-        originRequestPolicy: new cloudfront.OriginRequestPolicy(this, "OriginRequestPolicy", {
-          headerBehavior: cloudfront.OriginRequestHeaderBehavior.allowList(
-            "CloudFront-Is-Mobile-Viewer",
-            "CloudFront-Is-Tablet-Viewer",
-            "CloudFront-Is-Desktop-Viewer"
-          ),
-        }),
-      },
+    // const distribution = new cloudfront.Distribution(this, "ImageDistribution", {
+    //   defaultBehavior: {
+    //     origin: new origins.HttpOrigin(apiGateway.url.split('/')[2]),
+    //     allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+    //     cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+    //     originRequestPolicy: new cloudfront.OriginRequestPolicy(this, "OriginRequestPolicy", {
+    //       headerBehavior: cloudfront.OriginRequestHeaderBehavior.allowList(
+    //         "CloudFront-Is-Mobile-Viewer",
+    //         "CloudFront-Is-Tablet-Viewer",
+    //         "CloudFront-Is-Desktop-Viewer"
+    //       ),
+    //     }),
+    //   },
+    // });
+
+    // Outputs
+    new cdk.CfnOutput(this, 'ObjectLambdaAccessPointArn', {
+      value: objectLambdaAP.attrArn,
+      description: 'ARN of the S3 Object Lambda Access Point',
+    });
+
+    new cdk.CfnOutput(this, 'SourceBucketName', {
+      value: originalS3Bucket.bucketName,
+      description: 'Name of the source S3 bucket',
+    });
+
+    new cdk.CfnOutput(this, 'ApiEndpoint', {
+      value: apiGateway.url,
+      description: 'API Gateway endpoint URL',
     });
 
   }

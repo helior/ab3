@@ -1,4 +1,3 @@
-*.js
 !jest.config.js
 *.d.ts
 node_modules
@@ -9,4 +8,3 @@ node_modules
 cdk.out
 
 # Fixme: Jan 6, 2025 this became a problem. Why do I have to manually exclude???
-!lambda
