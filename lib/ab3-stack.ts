@@ -303,11 +303,11 @@ export class Ab3Stack extends cdk.Stack {
       new s3n.LambdaDestination(initializeProcessingLambda)
     )
 
-    // const sharpLayer = new lambda.LayerVersion(this, "SharpLayer", {
-    //   code: lambda.Code.fromAsset(path.join(__dirname, "../layers")),
-    //   compatibleRuntimes: [lambda.Runtime.NODEJS_18_X],
-    //   description: "A layer that includes the sharp library",
-    // });
+    const sharpLayer = new lambda.LayerVersion(this, "SharpLayer", {
+      code: lambda.Code.fromAsset(path.join(__dirname, "../layers/sharp.zip")),
+      compatibleRuntimes: [lambda.Runtime.NODEJS_18_X],
+      description: "A layer that includes the sharp library",
+    });
 
     const dynamicRequestTransformationLambda = new NodejsFunction(this, 'dynamicRequestTransformationHandler', {
 
@@ -335,11 +335,11 @@ export class Ab3Stack extends cdk.Stack {
       environment: {
         BUCKET_NAME: originalS3Bucket.bucketName,
       },
-      // layers: [sharpLayer]
+      layers: [sharpLayer]
     });
 
     originalS3Bucket.grantRead(dynamicRequestTransformationLambda);
-    
+
     dynamicRequestTransformationLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: ['ssm:GetParameter', 'ssm:GetParameters'],
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/image-processor/*`],
@@ -356,6 +356,7 @@ export class Ab3Stack extends cdk.Stack {
       environment: {
         BUCKET_NAME: originalS3Bucket.bucketName,
       },
+      // layers: [sharpLayer]
     });
     originalS3Bucket.grantRead(dynamicS3GetLambda);
     dynamicS3GetLambda.addToRolePolicy(new iam.PolicyStatement({
@@ -721,7 +722,7 @@ export class Ab3Stack extends cdk.Stack {
     apiGateway.root.addResource('finalize').addMethod('POST', new apigw.LambdaIntegration(finalizeLambda));
     apiGateway.root.addResource('images').addResource('{ownerId}').addMethod('GET', new apigw.LambdaIntegration(getImagesByOwnerLambda));
     apiGateway.root.addResource('getPresignedImageUrl').addResource('{S3ObjectKey}').addMethod('GET', new apigw.LambdaIntegration(getPresignedImageURLLambda));
-    // apiGateway.root.addResource('getImage').addResource('{S3ObjectKey}').addMethod('GET', new apigw.LambdaIntegration(dynamicRequestTransformationLambda));
+    apiGateway.root.addResource('getImage').addResource('{S3ObjectKey}').addMethod('GET', new apigw.LambdaIntegration(dynamicRequestTransformationLambda));
 
     apiGateway.addUsagePlan('usage-plan', {
       name: 'consumerA-multi-part-upload-plan',

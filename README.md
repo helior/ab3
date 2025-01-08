@@ -20,6 +20,8 @@ cdk deploy --context env="one" --context urlExpiry="900" --context whitelistip="
 
 # Destroy
 cdk destroy
+
+aws s3 cp s3://image-processor-ap-1qnajnu11hzp81rsryt95xw4use1a--ol-s3/slam.png ./localslam.png
 ```
 ---
 #### Outputs
