@@ -21,11 +21,14 @@ cdk deploy --context env="one" --context urlExpiry="900" --context whitelistip="
 # Destroy
 cdk destroy
 
+# Copy from bucket
 aws s3 cp s3://image-processor-ap-1qnajnu11hzp81rsryt95xw4use1a--ol-s3/slam.png ./localslam.png
+
+# Generate Presigned URL for Object Lambda Access Point
+aws s3 presign s3://image-processor-ap-1qnajnu11hzp81rsryt95xw4use1a--ol-s3/slam.png --expires=259200
 ```
 ---
 #### Outputs
 https://d1lm51n3xl8g8m.cloudfront.net
 https://ddzaqzc858s33.cloudfront.net
-
 ---
