@@ -3,6 +3,7 @@
 // import { S3ObjectLambdaClient, WriteGetObjectResponseCommand } from '@aws-sdk/client-s3-object-lambda';
 import { S3, GetObjectCommand, WriteGetObjectResponseCommand } from '@aws-sdk/client-s3';
 import { Readable } from 'stream';
+import sharp from 'sharp';
 
 const s3 = new S3();
 // const s3ObjectLambda = new S3ObjectLambdaClient();

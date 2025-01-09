@@ -2,7 +2,6 @@ import { S3Client, CreateMultipartUploadCommand} from '@aws-sdk/client-s3';
 
 const AWS = require('aws-sdk');
 const dynamodb = new AWS.DynamoDB.DocumentClient();
-// const { v4: uuidv4 } = require('uuid');
 const BUCKET_NAME = process.env['BUCKET_NAME'];
 
 const s3 = new S3Client();

@@ -13,9 +13,6 @@
     "@aws-sdk/client-ssm": "^3.721.0",
     "@aws-sdk/s3-request-presigner": "^3.722.0",
     "aws-sdk": "^2.1692.0",
-    "uuid": "^11.0.4"
-  },
-  "devDependencies": {
     "sharp": "^0.33.5"
   }
 }

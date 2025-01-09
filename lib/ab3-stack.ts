@@ -219,7 +219,6 @@ export class Ab3Stack extends cdk.Stack {
     //       // '@aws-sdk/client-s3',
     //       // '@aws-sdk/s3-request-presigner',
     //       // 'sharp',
-    //       // 'uuid'
     //     ],
     //   },
     //   runtime: Runtime.NODEJS_18_X,
@@ -303,30 +302,7 @@ export class Ab3Stack extends cdk.Stack {
       new s3n.LambdaDestination(initializeProcessingLambda)
     )
 
-    const sharpLayer = new lambda.LayerVersion(this, "SharpLayer", {
-      code: lambda.Code.fromAsset(path.join(__dirname, "../layers/sharp.zip")),
-      compatibleRuntimes: [lambda.Runtime.NODEJS_18_X],
-      description: "A layer that includes the sharp library",
-    });
-
     const dynamicRequestTransformationLambda = new NodejsFunction(this, 'dynamicRequestTransformationHandler', {
-
-      // bundling: {
-      //   externalModules: ['sharp'],
-      //   nodeModules: ['sharp'],
-      //   commandHooks: {
-      //     beforeBundling(inputDir: string, outputDir: string): string[] {
-      //       return [];
-      //     },
-      //     beforeInstall(inputDir: string, outputDir: string): string[] {
-      //       return [];
-      //     },
-      //     afterBundling(inputDir: string, outputDir: string): string[] {
-      //       return [`cd ${outputDir}`, "rm -rf node_modules/sharp && npm install --cpu=x64 --os=linux sharp"];
-      //     },
-      //   },
-      // },
-
       runtime: Runtime.NODEJS_18_X,
       entry: join(__dirname, '../lambda/dynamicRequestTransformation.js'),
       memorySize: 1024,
@@ -335,7 +311,6 @@ export class Ab3Stack extends cdk.Stack {
       environment: {
         BUCKET_NAME: originalS3Bucket.bucketName,
       },
-      layers: [sharpLayer]
     });
 
     originalS3Bucket.grantRead(dynamicRequestTransformationLambda);
@@ -356,7 +331,22 @@ export class Ab3Stack extends cdk.Stack {
       environment: {
         BUCKET_NAME: originalS3Bucket.bucketName,
       },
-      // layers: [sharpLayer]
+      bundling: {
+        externalModules: ['sharp'],
+        nodeModules: ['sharp'],
+        forceDockerBundling: true,
+        commandHooks: {
+          beforeBundling(inputDir: string, outputDir: string): string[] {
+            return [];
+          },
+          beforeInstall(inputDir: string, outputDir: string): string[] {
+            return [];
+          },
+          afterBundling(inputDir: string, outputDir: string): string[] {
+            return [`cd ${outputDir}`, "rm -rf node_modules/sharp && npm install --arch=x64 --platform=linux sharp"];
+          },
+        }
+      }
     });
     originalS3Bucket.grantRead(dynamicS3GetLambda);
     dynamicS3GetLambda.addToRolePolicy(new iam.PolicyStatement({
