@@ -253,6 +253,38 @@ export class Ab3Stack extends cdk.Stack {
     )
 
 
+    const reasonableResizeLambda = new NodejsFunction(this, 'ReasonableResizeHandler', {
+      runtime: Runtime.NODEJS_18_X,
+      entry: join(__dirname, '../lambda/reasonable-resize/index.js'),
+      functionName: `reasonable-resize-${env}`,
+      memorySize: 1024,
+      timeout: cdk.Duration.seconds(30),
+      environment: {
+        BUCKET_NAME: originalS3Bucket.bucketName,
+      },
+      // Note: Required for compiling platform-specific binary dependencies (Sharp)
+      bundling: {
+        externalModules: ['sharp'],
+        nodeModules: ['sharp'],
+        forceDockerBundling: true,
+        commandHooks: {
+          beforeBundling(inputDir: string, outputDir: string): string[] {
+            return [];
+          },
+          beforeInstall(inputDir: string, outputDir: string): string[] {
+            return [];
+          },
+          afterBundling(inputDir: string, outputDir: string): string[] {
+            return [`cd ${outputDir}`, "rm -rf node_modules/sharp && npm install --arch=x64 --platform=linux sharp"];
+          },
+        }
+      }
+    });
+    originalS3Bucket.grantRead(reasonableResizeLambda);
+    reasonableResizeLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['s3-object-lambda:WriteGetObjectResponse'],
+      resources: ['*'],
+    }));
 
     /**************************************************************************
      * Dynamic Resizing via S3 Object Lambda
@@ -525,6 +557,14 @@ export class Ab3Stack extends cdk.Stack {
     /**
      * Step-Function / tasks
      */
+
+    // Task: Reasonable resize via lambda
+    // reasonableResizeLambda
+    const resizeTask = new tasks.LambdaInvoke(this, 'Reasonably Resize', {
+      lambdaFunction: reasonableResizeLambda,
+      resultPath: '$.reasonableResize',
+    });
+
     // Task: Update DynamoDB for initializing processing
     const updateStatusInit = new tasks.DynamoUpdateItem(this, 'UpdateStatusInit', {
       table: imageTable,

@@ -34,7 +34,7 @@ exports.handler = async (event) => {
       Body: resized
     });
 
-    return { statusCod: 200 }
+    return { statusCode: 200 }
 
   } catch (error) {
     console.error('Error:', error);

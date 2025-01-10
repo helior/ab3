@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.726.0",
+    "axios": "^1.7.9"
+  }
+}
