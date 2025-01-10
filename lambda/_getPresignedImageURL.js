@@ -4,7 +4,7 @@ import { GetObjectCommand } from '@aws-sdk/client-s3';
 
 const apDomain = `https://${process.env.OLAP_ALIAS}.s3.us-east-1.amazonaws.com`;
 const s3 = new S3({
-  useObjectLambdaEndpoint: true,
+  // useObjectLambdaEndpoint: true,
   // endpoint: 'https://s3-object-lambda.us-east-1.amazonaws.com',
   // endpoint: apDomain,
   // region: 'us-east-1',
@@ -26,12 +26,12 @@ export const handler = async (event) => {
 
     // Create the GetObject command for the Object Lambda Access Point
     const command = new GetObjectCommand({
-      Bucket: process.env.OLAP_ALIAS,
+      Bucket: process.env.OLAP_ARN,
       Key: objectKey,
     });
 
     console.log('Generating presigned URL for:', {
-      bucket: process.env.OLAP_ALIAS,
+      bucket: process.env.OLAP_ARN,
       key: objectKey,
       clientConfig: JSON.stringify(s3.config)
     });
@@ -54,7 +54,8 @@ export const handler = async (event) => {
         debug: {
           bucket: command.input.Bucket,
           key: objectKey,
-          clientConfig: s3.config
+          clientConfig: s3.config,
+          env: process.env
           // endpoint: apDomain,
         }
       })

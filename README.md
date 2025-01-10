@@ -25,7 +25,11 @@ cdk destroy
 aws s3 cp s3://image-processor-ap-1qnajnu11hzp81rsryt95xw4use1a--ol-s3/slam.png ./localslam.png
 
 # Generate Presigned URL for Object Lambda Access Point
-aws s3 presign s3://image-processor-ap-1qnajnu11hzp81rsryt95xw4use1a--ol-s3/slam.png --expires=259200
+aws s3 presign s3://image-processor-ap-1qnajnu11hzp81rsryt95xw4use1a--ol-s3/slam.png --expires=518400
+
+
+# Deploy lambda functions faster
+export FILE="lambda/dynamic-s3-get/" && export FUNC="dynamic-s3-get-one" && zip -rj function.zip $FILE && aws lambda update-function-code --region 'us-east-1' --function-name $FUNC --zip-file fileb://function.zip
 ```
 ---
 #### Outputs

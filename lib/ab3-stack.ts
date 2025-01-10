@@ -18,7 +18,6 @@ import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Runtime } from 'aws-cdk-lib/aws-lambda';
 import { join } from 'path';
 import * as path from 'path';
-// import { experimental } from 'aws-cdk-lib/aws-cloudfront';
 
 export class Ab3Stack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -148,51 +147,6 @@ export class Ab3Stack extends cdk.Stack {
     });
 
 
-    // // Add Lambda@Edge permissions
-    // const edgeRole = new iam.Role(this, 'EdgeRole', {
-    //   assumedBy: new iam.CompositePrincipal(
-    //     new iam.ServicePrincipal('lambda.amazonaws.com'),
-    //     new iam.ServicePrincipal('edgelambda.amazonaws.com')
-    //   ),
-    //   managedPolicies: [
-    //     iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole')
-    //   ],
-    //   inlinePolicies: {
-    //     'EdgeLogging': new iam.PolicyDocument({
-    //       statements: [
-    //         new iam.PolicyStatement({
-    //           effect: iam.Effect.ALLOW,
-    //           actions: [
-    //             'logs:CreateLogGroup',
-    //             'logs:CreateLogStream',
-    //             'logs:PutLogEvents'
-    //           ],
-    //           resources: ['arn:aws:logs:*:*:*']
-    //         })
-    //       ]
-    //     })
-    //   }
-    // });
-
-    // // Allows reading from S3 and writing logs, etc.
-    // const lambdaEdgeRole = new iam.Role(this, 'LambdaEdgeRole', {
-    //   assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
-    //   description: 'Role used by the Lambda@Edge function to read from S3 and write logs.',
-    // });
-
-    // // Attach the basic execution role (for CloudWatch Logs)
-    // lambdaEdgeRole.addManagedPolicy(
-    //   iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
-    // );
-
-    // // Add permission to read objects from our bucket
-    // lambdaEdgeRole.addToPolicy(
-    //   new iam.PolicyStatement({
-    //     actions: ['s3:GetObject'],
-    //     resources: [originalS3Bucket.bucketArn + '/*'],
-    //   }),
-    // );
-
     /**
      * DynamoDB
      */
@@ -209,21 +163,10 @@ export class Ab3Stack extends cdk.Stack {
     });
 
 
-    /**
-     * Lambda
-     */
-    // const commonNodeJsProps = {
-    //   bundling: {
-    //     externalModules: [
-    //       // 'aws-sdk',
-    //       // '@aws-sdk/client-s3',
-    //       // '@aws-sdk/s3-request-presigner',
-    //       // 'sharp',
-    //     ],
-    //   },
-    //   runtime: Runtime.NODEJS_18_X,
-    // };
 
+    /**************************************************************************
+     * Multi-part Upload lambdas
+     */
     // Initialize Multi-part upload
     const initializeLambda = new NodejsFunction(this, 'initializeHandler', {
       runtime: Runtime.NODEJS_18_X,
@@ -273,6 +216,9 @@ export class Ab3Stack extends cdk.Stack {
     });
     originalS3Bucket.grantReadWrite(finalizeLambda);
 
+    /**************************************************************************
+     * Application endpoints
+     */
     // Fetch all records by Owner
     const getImagesByOwnerLambda = new NodejsFunction(this, 'getImagesByOwnerHandler', {
       runtime: Runtime.NODEJS_18_X,
@@ -285,7 +231,11 @@ export class Ab3Stack extends cdk.Stack {
     });
     imageTable.grantReadWriteData(getImagesByOwnerLambda);  //previously grantFullAccess()
 
-    // Fixme: initialize image preprocessing via S3 PUT event
+
+
+    /**************************************************************************
+     * Step-function invocation/lambda tasks
+     */
     const initializeProcessingLambda = new NodejsFunction(this, 'initializeProcessingHandler', {
       runtime: Runtime.NODEJS_18_X,
       entry: join(__dirname, '../lambda/initializeProcessing.js'),
@@ -302,35 +252,39 @@ export class Ab3Stack extends cdk.Stack {
       new s3n.LambdaDestination(initializeProcessingLambda)
     )
 
-    const dynamicRequestTransformationLambda = new NodejsFunction(this, 'dynamicRequestTransformationHandler', {
-      runtime: Runtime.NODEJS_18_X,
-      entry: join(__dirname, '../lambda/dynamicRequestTransformation.js'),
-      memorySize: 1024,
-      timeout: cdk.Duration.seconds(30),
-      functionName: `dynamic-request-transformation-${env}`,
-      environment: {
-        BUCKET_NAME: originalS3Bucket.bucketName,
-      },
-    });
 
-    originalS3Bucket.grantRead(dynamicRequestTransformationLambda);
 
-    dynamicRequestTransformationLambda.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['ssm:GetParameter', 'ssm:GetParameters'],
-      resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/image-processor/*`],
-    }));
+    /**************************************************************************
+     * Dynamic Resizing via S3 Object Lambda
+     */
 
+    // const dynamicRequestTransformationLambda = new NodejsFunction(this, 'dynamicRequestTransformationHandler', {
+    //   runtime: Runtime.NODEJS_18_X,
+    //   entry: join(__dirname, '../lambda/dynamicRequestTransformation.js'),
+    //   memorySize: 1024,
+    //   timeout: cdk.Duration.seconds(30),
+    //   functionName: `dynamic-request-transformation-${env}`,
+    //   environment: {
+    //     BUCKET_NAME: originalS3Bucket.bucketName,
+    //   },
+    // });
+    // originalS3Bucket.grantRead(dynamicRequestTransformationLambda);
+    // dynamicRequestTransformationLambda.addToRolePolicy(new iam.PolicyStatement({
+    //   actions: ['ssm:GetParameter', 'ssm:GetParameters'],
+    //   resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/image-processor/*`],
+    // }));
 
     // Create the Lambda function using NodejsFunction
     const dynamicS3GetLambda = new NodejsFunction(this, 'DynamicS3GetHandler', {
       runtime: Runtime.NODEJS_18_X,
-      entry: join(__dirname, '../lambda/dynamicS3Get.js'),
+      entry: join(__dirname, '../lambda/dynamic-s3-get/index.js'),
       functionName: `dynamic-s3-get-${env}`,
       memorySize: 1024,
       timeout: cdk.Duration.seconds(30),
       environment: {
         BUCKET_NAME: originalS3Bucket.bucketName,
       },
+      // Note: Required for compiling platform-specific binary dependencies (Sharp)
       bundling: {
         externalModules: ['sharp'],
         nodeModules: ['sharp'],
@@ -372,16 +326,17 @@ export class Ab3Stack extends cdk.Stack {
         }],
       },
     });
-
-
-    const getPresignedImageURLLambda = new NodejsFunction(this, 'GetPresignedImageURLHandler', {
-      runtime: Runtime.NODEJS_18_X,
-      entry: path.join(__dirname, '../lambda/getPresignedImageURL.js'),
-      functionName: `get-presigned-image-url-${env}`,
+    // Pre-signed URL for S3 Object Lambda Access Point
+    const getPresignedImageURLLambda = new lambda.Function(this, 'GetPresignedImageURLHandler', {
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'getPresignedImageURL.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda')),
       environment: {
-        OLAP_ALIAS: objectLambdaAP.attrAliasValue,
+        OLAP_ARN: objectLambdaAP.attrArn
       },
+      functionName: `get-presigned-image-url-${env}`,
     });
+
 
     // getPresignedImageURLLambda.addToRolePolicy(new iam.PolicyStatement({
     //   actions: [
@@ -401,7 +356,7 @@ export class Ab3Stack extends cdk.Stack {
     //     ],
     // }));
 
-    // Grant presign function permissions for S3 and Lambda invocation
+    // TODO: NOT WORKING!! Grant presign function permissions for S3 and Lambda invocation
     getPresignedImageURLLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: [
         's3:GetObject'
@@ -712,7 +667,7 @@ export class Ab3Stack extends cdk.Stack {
     apiGateway.root.addResource('finalize').addMethod('POST', new apigw.LambdaIntegration(finalizeLambda));
     apiGateway.root.addResource('images').addResource('{ownerId}').addMethod('GET', new apigw.LambdaIntegration(getImagesByOwnerLambda));
     apiGateway.root.addResource('getPresignedImageUrl').addResource('{S3ObjectKey}').addMethod('GET', new apigw.LambdaIntegration(getPresignedImageURLLambda));
-    apiGateway.root.addResource('getImage').addResource('{S3ObjectKey}').addMethod('GET', new apigw.LambdaIntegration(dynamicRequestTransformationLambda));
+    // apiGateway.root.addResource('getImage').addResource('{S3ObjectKey}').addMethod('GET', new apigw.LambdaIntegration(dynamicRequestTransformationLambda));
 
     apiGateway.addUsagePlan('usage-plan', {
       name: 'consumerA-multi-part-upload-plan',
