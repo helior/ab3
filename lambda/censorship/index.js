@@ -13,10 +13,10 @@ async function streamToBuffer(stream) {
 }
 
 exports.handler = async (event) => {
-  console.log('⭐️ Reasonable Resize Event:', JSON.stringify(event, null, 2));
+  console.log('⭐️ Censorship event:', JSON.stringify(event, null, 2));
   const { bucket, key } = event.s3;
   const s3Client = new S3Client();
-  const image = await s3.getObject({ Bucket: bucket, Key: key });
+  // const image = await s3.getObject({ Bucket: bucket, Key: key });
 
   try {
     const getCommand = new GetObjectCommand({
@@ -27,17 +27,14 @@ exports.handler = async (event) => {
     const imageBuffer = await streamToBuffer(Body);
 
     // Resize the image.
-    const resized = await sharp(imageBuffer)
-      .resize(1800, 1800, {
-        fit: 'inside',
-        withoutEnlargement: true,
-      })
+    const blurred = await sharp(imageBuffer)
+      .blur(4)  // TODO: Parameter Store
       .toBuffer();
 
     const putCommand = new PutObjectCommand({
       Bucket: bucket,
       Key: key,
-      Body: resized,
+      Body: blurred,
       ContentType: ContentType
     });
 

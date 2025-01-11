@@ -7,7 +7,7 @@ const BUCKET_NAME = process.env['BUCKET_NAME'];
 const s3 = new S3Client();
 
 exports.handler = async (event) => {
-	console.log(event);
+	console.log('⭐️Initialize', event);
 	if (!event.body) {
 		throw new Error("event.body is not defined");
 	}

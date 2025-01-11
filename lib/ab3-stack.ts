@@ -232,7 +232,6 @@ export class Ab3Stack extends cdk.Stack {
     imageTable.grantReadWriteData(getImagesByOwnerLambda);  //previously grantFullAccess()
 
 
-
     /**************************************************************************
      * Step-function invocation/lambda tasks
      */
@@ -280,11 +279,79 @@ export class Ab3Stack extends cdk.Stack {
         }
       }
     });
-    originalS3Bucket.grantRead(reasonableResizeLambda);
-    reasonableResizeLambda.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['s3-object-lambda:WriteGetObjectResponse'],
-      resources: ['*'],
-    }));
+    originalS3Bucket.grantReadWrite(reasonableResizeLambda);
+
+    const censorshipLambda = new NodejsFunction(this, 'CensorshipHandler', {
+      runtime: Runtime.NODEJS_18_X,
+      entry: join(__dirname, '../lambda/censorship/index.js'),
+      functionName: `censorship-${env}`,
+      memorySize: 1024,
+      timeout: cdk.Duration.seconds(30),
+      environment: {
+        BUCKET_NAME: originalS3Bucket.bucketName,
+      },
+      // Note: Required for compiling platform-specific binary dependencies (Sharp)
+      bundling: {
+        externalModules: ['sharp'],
+        nodeModules: ['sharp'],
+        forceDockerBundling: true,
+        commandHooks: {
+          beforeBundling(inputDir: string, outputDir: string): string[] {
+            return [];
+          },
+          beforeInstall(inputDir: string, outputDir: string): string[] {
+            return [];
+          },
+          afterBundling(inputDir: string, outputDir: string): string[] {
+            return [`cd ${outputDir}`, "rm -rf node_modules/sharp && npm install --arch=x64 --platform=linux sharp"];
+          },
+        }
+      }
+    });
+    originalS3Bucket.grantReadWrite(censorshipLambda);
+
+    const smartCropLambda = new NodejsFunction(this, 'smartCropHandler', {
+      runtime: Runtime.NODEJS_18_X,
+      entry: join(__dirname, '../lambda/smart-crop/index.js'),
+      functionName: `smart-crop-${env}`,
+      memorySize: 1024,
+      timeout: cdk.Duration.seconds(30),
+      environment: {
+        BUCKET_NAME: originalS3Bucket.bucketName,
+      },
+      // Note: Required for compiling platform-specific binary dependencies (Sharp)
+      bundling: {
+        externalModules: ['sharp'],
+        nodeModules: ['sharp'],
+        forceDockerBundling: true,
+        commandHooks: {
+          beforeBundling(inputDir: string, outputDir: string): string[] {
+            return [];
+          },
+          beforeInstall(inputDir: string, outputDir: string): string[] {
+            return [];
+          },
+          afterBundling(inputDir: string, outputDir: string): string[] {
+            return [`cd ${outputDir}`, "rm -rf node_modules/sharp && npm install --arch=x64 --platform=linux sharp"];
+          },
+        }
+      }
+    });
+    originalS3Bucket.grantReadWrite(smartCropLambda);
+    smartCropLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['rekognition:DetectFaces'],
+        resources: ['*'],
+      })
+    );
+
+
+
+
+
+
+
+
 
     /**************************************************************************
      * Dynamic Resizing via S3 Object Lambda
@@ -558,11 +625,22 @@ export class Ab3Stack extends cdk.Stack {
      * Step-Function / tasks
      */
 
-    // Task: Reasonable resize via lambda
-    // reasonableResizeLambda
+    // Task: Reasonable resize, via lambda
     const resizeTask = new tasks.LambdaInvoke(this, 'Reasonably Resize', {
       lambdaFunction: reasonableResizeLambda,
       resultPath: '$.reasonableResize',
+    });
+
+    // Task: Censorship, via lambda
+    const censorshipTask = new tasks.LambdaInvoke(this, 'Censorship', {
+      lambdaFunction: censorshipLambda,
+      resultPath: '$.censorship',
+    });
+
+    // Task: Smart Crop, via lambda
+    const smartCropTask = new tasks.LambdaInvoke(this, 'Smart Crop', {
+      lambdaFunction: smartCropLambda,
+      resultPath: '$.smartCrop',
     });
 
     // Task: Update DynamoDB for initializing processing
@@ -580,6 +658,7 @@ export class Ab3Stack extends cdk.Stack {
       },
       resultPath: '$.recordMeta'
     });
+    // TODO: send notification for websocket?
 
     // Task: Content moderation (using Rekognition)
     const detectModerationLabels = new tasks.CallAwsService(this, 'DetectModerationLabels', {
@@ -597,7 +676,35 @@ export class Ab3Stack extends cdk.Stack {
       iamResources: ['*'],
       resultPath: '$.moderationResults',
     });
-    originalS3Bucket.grantRead(new iam.ServicePrincipal('rekognition.amazonaws.com'));
+
+    const countModerationLabels = new tasks.EvaluateExpression(this, 'Count moderation labels', {
+      expression: 'States.ArrayLength($.moderationResults.ModerationLabels)',
+      resultPath: '$.moderationLabelCount'
+    })
+// create_message = tasks.EvaluateExpression(self, "Create message",
+//       // # Note: this is a string inside a string.
+//       expression="`Now waiting ${$.waitSeconds} seconds...`",
+//       runtime=lambda_.Runtime.NODEJS_LATEST,
+//       result_path="$.message"
+//   )
+    // originalS3Bucket.grantRead(new iam.ServicePrincipal('rekognition.amazonaws.com'));
+
+    // Task: Content moderation (using Rekognition)
+    const detectFaces = new tasks.CallAwsService(this, 'DetectFaces', {
+      service: 'rekognition',
+      action: 'detectFaces',
+      parameters: {
+        Image: {
+          S3Object: {
+            Bucket: sfn.JsonPath.stringAt('$.s3.bucket'),
+            Name: sfn.JsonPath.stringAt('$.s3.key'),
+          },
+        },
+        Attributes: ['ALL', 'DEFAULT'],
+      },
+      iamResources: ['*'],
+      resultPath: '$.faceResults',
+    });
 
     // Task: Update DynamoDB with rejection
     const updateStatusRejected = new tasks.DynamoUpdateItem(this, 'UpdateStatusRejected', {
@@ -605,14 +712,12 @@ export class Ab3Stack extends cdk.Stack {
       key: {
         s3ObjectKey: tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt('$.record.s3ObjectKey')),
       },
-      updateExpression: 'SET #status = :status, #results = :results',
+      updateExpression: 'SET #status = :status',
       expressionAttributeNames: {
         '#status': 'status',
-        '#results': 'moderationResults',
       },
       expressionAttributeValues: {
         ':status': tasks.DynamoAttributeValue.fromString('rejected'),
-        ':results': tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt('$.moderationResults')),
       },
     });
 
@@ -622,10 +727,9 @@ export class Ab3Stack extends cdk.Stack {
       key: {
         s3ObjectKey: tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt('$.record.s3ObjectKey')),
       },
-      updateExpression: 'SET #status = :status, #results = :results',
+      updateExpression: 'SET #status = :status',
       expressionAttributeNames: {
         '#status': 'status',
-        '#results': 'moderationResults',
       },
       expressionAttributeValues: {
         ':status': tasks.DynamoAttributeValue.fromString('complete'),
@@ -636,21 +740,27 @@ export class Ab3Stack extends cdk.Stack {
     // Create choice conditions
     const kidsWithInappropriateContent = sfn.Condition.and(
       sfn.Condition.stringEquals('$.record.businessUnit', 'kids'),
-      sfn.Condition.numberGreaterThan('$.moderationResults.ModerationLabels', 0)
+      // sfn.Condition.isPresent('$.moderationResults.ModerationLabels[0]') // if any moderationLabels exist, it's inappropriate!
+      sfn.Condition.numberGreaterThan('$.moderationLabelCount', 0) // if any moderationLabels exist, it's inappropriate!
     );
 
     // Step Function
     const stateMachine = new sfn.StateMachine(this, 'ImageProcessingStateMachine', {
       definition: sfn.Chain
         .start(updateStatusInit)
+        .next(resizeTask)
         .next(detectModerationLabels)
+        // .next(countModerationLabels)
+        .next(detectFaces)
+        .next(smartCropTask)
+        .next(censorshipTask)
         .next(new sfn.Choice(this, 'EvaluateModeration')
           .when(kidsWithInappropriateContent, updateStatusRejected)
           .otherwise(updateStatusComplete)),
     });
     stateMachine.grantStartExecution(initializeProcessingLambda);
     initializeProcessingLambda.addEnvironment('STATE_MACHINE_ARN', stateMachine.stateMachineArn);
-
+    originalS3Bucket.grantReadWrite(stateMachine)
 
 
     // dynamicRequestTransformationLambda.addToRolePolicy(new iam.PolicyStatement({
