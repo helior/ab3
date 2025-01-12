@@ -28,7 +28,7 @@ exports.handler = async (event) => {
 
     // Resize the image.
     const resized = await sharp(imageBuffer)
-      .resize(1800, 1800, {
+      .resize(3000, 3000, { // TODO: Parameter store
         fit: 'inside',
         withoutEnlargement: true,
       })

@@ -247,7 +247,8 @@ export class Ab3Stack extends cdk.Stack {
     imageTable.grantReadWriteData(initializeProcessingLambda);
 
     originalS3Bucket.addEventNotification(
-      s3.EventType.OBJECT_CREATED,
+      // Note: If I use OBJECT_CREATED event, will cause an infinite loop because new versions are PUT in the workflow
+      s3.EventType.OBJECT_CREATED_COMPLETE_MULTIPART_UPLOAD,
       new s3n.LambdaDestination(initializeProcessingLambda)
     )
 
@@ -700,7 +701,7 @@ export class Ab3Stack extends cdk.Stack {
             Name: sfn.JsonPath.stringAt('$.s3.key'),
           },
         },
-        Attributes: ['ALL', 'DEFAULT'],
+        Attributes: ['DEFAULT'],
       },
       iamResources: ['*'],
       resultPath: '$.faceResults',
@@ -753,7 +754,7 @@ export class Ab3Stack extends cdk.Stack {
         // .next(countModerationLabels)
         .next(detectFaces)
         .next(smartCropTask)
-        .next(censorshipTask)
+        // .next(censorshipTask)
         .next(new sfn.Choice(this, 'EvaluateModeration')
           .when(kidsWithInappropriateContent, updateStatusRejected)
           .otherwise(updateStatusComplete)),

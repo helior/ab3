@@ -9,3 +9,4 @@ cdk.out
 
 # Fixme: Jan 6, 2025 this became a problem. Why do I have to manually exclude???
 layers/*
+lambda/**/package-lock.json

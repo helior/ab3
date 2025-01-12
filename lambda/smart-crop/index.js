@@ -1,5 +1,5 @@
 import { S3 } from '@aws-sdk/client-s3';
-const { S3Client, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
+import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { RekognitionClient, DetectFacesCommand } from "@aws-sdk/client-rekognition";
 import sharp from 'sharp';
 
@@ -14,48 +14,56 @@ async function streamToBuffer(stream) {
   return Buffer.concat(chunks);
 }
 
-function handleBounds(response, faceIndex, boundingBox) {
-  // handle bounds > 1 and < 0
-  for (const bound in response.FaceDetails[faceIndex].BoundingBox) {
-    if (response.FaceDetails[faceIndex].BoundingBox[bound] < 0) boundingBox[bound] = 0;
-    else if (response.FaceDetails[faceIndex].BoundingBox[bound] > 1) boundingBox[bound] = 1;
-    else boundingBox[bound] = response.FaceDetails[faceIndex].BoundingBox[bound];
+
+function handleBounds(response) {
+  if (!response.FaceDetails || response.FaceDetails.length <= 0) {
+    return { Height: 1, Left: 0, Top: 0, Width: 1 };
   }
 
-  // handle bounds greater than the size of the image
+  // Initialize bounds with the first face's values
+  let minLeft = response.FaceDetails[0].BoundingBox.Left;
+  let minTop = response.FaceDetails[0].BoundingBox.Top;
+  let maxRight = response.FaceDetails[0].BoundingBox.Left + response.FaceDetails[0].BoundingBox.Width;
+  let maxBottom = response.FaceDetails[0].BoundingBox.Top + response.FaceDetails[0].BoundingBox.Height;
+
+  // Find the min/max bounds across all faces
+  for (const face of response.FaceDetails) {
+    const box = face.BoundingBox;
+
+    // Find leftmost and topmost points
+    minLeft = Math.min(minLeft, box.Left);
+    minTop = Math.min(minTop, box.Top);
+
+    // Find rightmost and bottommost points
+    maxRight = Math.max(maxRight, box.Left + box.Width);
+    maxBottom = Math.max(maxBottom, box.Top + box.Height);
+  }
+
+  // Ensure bounds are within 0-1 range
+  const boundingBox = {
+    Left: Math.max(0, minLeft),
+    Top: Math.max(0, minTop),
+    Width: Math.min(1, maxRight) - Math.max(0, minLeft),
+    Height: Math.min(1, maxBottom) - Math.max(0, minTop)
+  };
+
+  // Handle bounds greater than the size of the image
   if (boundingBox.Left + boundingBox.Width > 1) {
     boundingBox.Width = 1 - boundingBox.Left;
   }
   if (boundingBox.Top + boundingBox.Height > 1) {
     boundingBox.Height = 1 - boundingBox.Top;
   }
+
+  return boundingBox;
 }
 
-async function getBoundingBox(imageBuffer, faceIndex) {
-  const params = { Image: { Bytes: imageBuffer } };
-
+async function getBoundingBox(faceResults) {
   try {
+    const response = faceResults;
+    const boundingBox = handleBounds(response);
 
-    // ⭐️ TODO!!!
-    // const response = await this.rekognitionClient.detectFaces(params).promise(); // TODO: Replace with my code
-    const command = new DetectFacesCommand({
-      Image: {
-        Btyes: imageBuffer
-      },
-      Attributes: [ "DEFAULT" , "FACE_OCCLUDED" ]
-    });
-    const response = await rekognitionClient.send(command);
-    console.log('⭐️ FaceDetection response', response);
-
-    // const response = {};
-    if (response.FaceDetails.length <= 0) {
-      return { height: 1, left: 0, top: 0, width: 1 };
-    }
-    console.log('⭐️ made it passed FaceDetails.length <= 0')
-    const boundingBox = {};
-
-    handleBounds(response, faceIndex, boundingBox);
-    console.log('⭐️ resulting Bounding box', boundingBox);
+    // console.log('⭐️ boundingBox', boundingBox);
     return {
       height: boundingBox.Height,
       left: boundingBox.Left,
@@ -64,15 +72,13 @@ async function getBoundingBox(imageBuffer, faceIndex) {
     };
   } catch (error) {
     console.error(error);
-
-    if (
-      error.message === "Cannot read property 'BoundingBox' of undefined" ||
-      error.message === "Cannot read properties of undefined (reading 'BoundingBox')"
-    ) {
-      console.error("You have provided a FaceIndex value that exceeds the length of the zero-based detectedFaces array. Please specify a value that is in-range.")
+    if (error.message.includes("Cannot read property 'BoundingBox'")) {
+      console.error("Error processing face detection results. Please ensure valid face detection data is provided.");
     } else {
-      console.error(error)
+      console.error(error);
     }
+    // Return full image bounds in case of error
+    return { height: 1, left: 0, top: 0, width: 1 };
   }
 }
 
@@ -101,11 +107,10 @@ function getCropArea(boundingBox, padding, boxSize) {
 }
 
 exports.handler = async (event) => {
-  console.log('⭐️ SmartCrop event:', JSON.stringify(event, null, 2));
+  // console.log('⭐️ SmartCrop event:', JSON.stringify(event, null, 2));
   const { bucket, key } = event.s3;
   const s3Client = new S3Client();
-  // const image = await s3.getObject({ Bucket: bucket, Key: key });
-
+  const faceResults = event.faceResults;
   try {
     const getCommand = new GetObjectCommand({
       Bucket: bucket,
@@ -114,17 +119,25 @@ exports.handler = async (event) => {
     const { Body, ContentType } = await s3Client.send(getCommand);
     const imageBuffer = await streamToBuffer(Body);
 
-    const faceIndex = undefined;
-    const padding = undefined;
-
-    const boundingBox = await getBoundingBox(imageBuffer.data, faceIndex ?? 0);
-    const cropArea = getCropArea(boundingBox, padding ?? 0, imageBuffer.info);
+    const faceIndex = 0;
+    const padding = 0;
 
     // Crop (Smart-esque)
-    cropped =await sharp(imageBuffer)
+    const sharpImage = sharp(imageBuffer);
+    const metadata = await sharpImage.metadata();
+    // console.log('⭐️ metadata', metadata);
+
+    // Or... use Step Function results
+    const boundingBox = await getBoundingBox(faceResults, faceIndex);
+    // console.log('⭐️ resulting Bounding box', boundingBox);
+    const cropArea = getCropArea(boundingBox, padding, metadata);
+    // console.log('⭐️ cropArea', cropArea)
+
+    const cropped = await sharpImage
       .extract(cropArea)
       .toBuffer();
 
+    // console.log('⭐️ cropped', cropped)
     const putCommand = new PutObjectCommand({
       Bucket: bucket,
       Key: key,
