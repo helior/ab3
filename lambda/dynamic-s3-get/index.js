@@ -21,7 +21,7 @@ exports.handler = async (event) => {
 
     // Resize the image.
     const resized = await sharp(originalObject.data)
-      .resize(256, 256, {
+      .resize(256, 256, { // ❗️TODO: Resize based on device-type!!
         fit: 'inside',
         withoutEnlargement: true,
       })

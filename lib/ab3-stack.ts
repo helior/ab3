@@ -637,21 +637,18 @@ export class Ab3Stack extends cdk.Stack {
     const resizeTask = new tasks.LambdaInvoke(this, 'Reasonably Resize', {
       lambdaFunction: reasonableResizeLambda,
       resultPath: '$.reasonableResize',
-      outputPath: '$.Payload'
     });
 
     // Task: Censorship, via lambda
     const censorshipTask = new tasks.LambdaInvoke(this, 'Censorship', {
       lambdaFunction: censorshipLambda,
       resultPath: '$.censorship',
-      outputPath: '$.Payload'
     });
 
     // Task: Smart Crop, via lambda
     const smartCropTask = new tasks.LambdaInvoke(this, 'Smart Crop', {
       lambdaFunction: smartCropLambda,
       resultPath: '$.smartCrop',
-      outputPath: '$.Payload'
     });
 
     // Task: Count Moderation Labels, via lambda
@@ -659,11 +656,11 @@ export class Ab3Stack extends cdk.Stack {
     const countTask = new tasks.LambdaInvoke(this, 'Count Moderation Labels', {
       lambdaFunction: countModerationLabelsLambda,
       resultPath: '$.moderationLabelsCount',
-      outputPath: '$.Payload'
+      // outputPath: '$.Payload'
     });
 
     // Task: Update DynamoDB for initializing processing
-    const updateStatusInit = new tasks.DynamoUpdateItem(this, 'Initialize Status', {
+    const updateStatusInit = new tasks.DynamoUpdateItem(this, 'Initialize Processing', {
       table: imageTable,
       key: {
         s3ObjectKey: tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt('$.record.s3ObjectKey')),
@@ -673,7 +670,7 @@ export class Ab3Stack extends cdk.Stack {
         '#status': 'status',
       },
       expressionAttributeValues: {
-        ':status': tasks.DynamoAttributeValue.fromString('init processing'),
+        ':status': tasks.DynamoAttributeValue.fromString('processing'),
       },
       resultPath: '$.recordMeta'
     });
@@ -696,6 +693,7 @@ export class Ab3Stack extends cdk.Stack {
       resultPath: '$.moderationResults',
     });
 
+    // Fixme: Try to use intrinsic functions instead of a lambda to derive
     // const countModerationLabels = new tasks.EvaluateExpression(this, 'Count moderation labels', {
     //   expression: 'States.ArrayLength($.moderationResults.ModerationLabels)',
     //   resultPath: '$.moderationLabelsCount'
@@ -748,37 +746,26 @@ export class Ab3Stack extends cdk.Stack {
       },
     });
 
-    // Create choice conditions
-    const kidsWithInappropriateContent = sfn.Condition.and(
-      sfn.Condition.stringEquals('$.record.businessUnit', 'kids'),
-      // sfn.Condition.isPresent('$.moderationResults.ModerationLabels[0]') // if any moderationLabels exist, it's inappropriate!
-      sfn.Condition.numberGreaterThan('$.moderationLabelsCount', 0) // if any moderationLabels exist, it's inappropriate!
-    );
+    const madeForKids = sfn.Condition.stringEquals('$.record.businessUnit', 'kid');
+    const isInappropriate = sfn.Condition.numberGreaterThan('$.moderationLabelsCount.Payload', 0)
+    const inappropriateForKids = sfn.Condition.and(madeForKids, isInappropriate);
 
     // Step Function
-    const stateMachine = new sfn.StateMachine(this, 'ImageProcessingStateMachine', {
-      definition: sfn.Chain
-        .start(updateStatusInit)
-        .next(resizeTask)
-        .next(detectModerationLabels)
-        .next(countTask)
-        .next(new sfn.Choice(this, 'Is not kid-friendly?')
-          .when(kidsWithInappropriateContent, updateStatusRejected)
-          .otherwise(detectFaces
-            .next(smartCropTask)
-            .next(new sfn.Choice(this, 'Is inappropriate?')
-              .when(sfn.Condition.numberGreaterThan('$.moderationLabelsCount', 0), censorshipTask)
-              .afterwards()
-            )
-            .next(updateStatusComplete)
+    const stateMachine = new sfn.StateMachine(this, 'ImageProcessingStateMachine', {definition: sfn.Chain
+      .start(updateStatusInit)
+      .next(resizeTask)
+      .next(detectModerationLabels)
+      .next(countTask)
+      .next(new sfn.Choice(this, 'Is not kid-friendly?')
+        .when(inappropriateForKids, updateStatusRejected)
+        .otherwise(detectFaces
+          .next(smartCropTask)
+          .next(new sfn.Choice(this, 'Is inappropriate?')
+            .when(isInappropriate, censorshipTask.next(updateStatusComplete))
+            .otherwise(updateStatusComplete)
           )
         )
-        // .next(detectFaces)
-        // .next(smartCropTask)
-        // .next(new sfn.Choice(this, 'Is inappropriate?')
-          // .when(sfn.Condition.numberGreaterThan('$.moderationLabelsCount', 0), censorshipTask))
-        // .next(updateStatusComplete)
-
+      )
     });
     stateMachine.grantStartExecution(initializeProcessingLambda);
     initializeProcessingLambda.addEnvironment('STATE_MACHINE_ARN', stateMachine.stateMachineArn);
