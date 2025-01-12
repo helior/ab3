@@ -253,6 +253,13 @@ export class Ab3Stack extends cdk.Stack {
     )
 
 
+    // Initialize Multi-part upload
+    const countModerationLabelsLambda = new NodejsFunction(this, 'countModerationLabelsHandler', {
+      runtime: Runtime.NODEJS_18_X,
+      entry: join(__dirname, '../lambda/countModerationLabels.js'),
+      functionName: `count-moderation-labels-${env}`
+    });
+
     const reasonableResizeLambda = new NodejsFunction(this, 'ReasonableResizeHandler', {
       runtime: Runtime.NODEJS_18_X,
       entry: join(__dirname, '../lambda/reasonable-resize/index.js'),
@@ -630,22 +637,33 @@ export class Ab3Stack extends cdk.Stack {
     const resizeTask = new tasks.LambdaInvoke(this, 'Reasonably Resize', {
       lambdaFunction: reasonableResizeLambda,
       resultPath: '$.reasonableResize',
+      outputPath: '$.Payload'
     });
 
     // Task: Censorship, via lambda
     const censorshipTask = new tasks.LambdaInvoke(this, 'Censorship', {
       lambdaFunction: censorshipLambda,
       resultPath: '$.censorship',
+      outputPath: '$.Payload'
     });
 
     // Task: Smart Crop, via lambda
     const smartCropTask = new tasks.LambdaInvoke(this, 'Smart Crop', {
       lambdaFunction: smartCropLambda,
       resultPath: '$.smartCrop',
+      outputPath: '$.Payload'
+    });
+
+    // Task: Count Moderation Labels, via lambda
+    // Fixme: A cooler way of doing this is intrinsic functions
+    const countTask = new tasks.LambdaInvoke(this, 'Count Moderation Labels', {
+      lambdaFunction: countModerationLabelsLambda,
+      resultPath: '$.moderationLabelsCount',
+      outputPath: '$.Payload'
     });
 
     // Task: Update DynamoDB for initializing processing
-    const updateStatusInit = new tasks.DynamoUpdateItem(this, 'UpdateStatusInit', {
+    const updateStatusInit = new tasks.DynamoUpdateItem(this, 'Initialize Status', {
       table: imageTable,
       key: {
         s3ObjectKey: tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt('$.record.s3ObjectKey')),
@@ -678,17 +696,10 @@ export class Ab3Stack extends cdk.Stack {
       resultPath: '$.moderationResults',
     });
 
-    const countModerationLabels = new tasks.EvaluateExpression(this, 'Count moderation labels', {
-      expression: 'States.ArrayLength($.moderationResults.ModerationLabels)',
-      resultPath: '$.moderationLabelCount'
-    })
-// create_message = tasks.EvaluateExpression(self, "Create message",
-//       // # Note: this is a string inside a string.
-//       expression="`Now waiting ${$.waitSeconds} seconds...`",
-//       runtime=lambda_.Runtime.NODEJS_LATEST,
-//       result_path="$.message"
-//   )
-    // originalS3Bucket.grantRead(new iam.ServicePrincipal('rekognition.amazonaws.com'));
+    // const countModerationLabels = new tasks.EvaluateExpression(this, 'Count moderation labels', {
+    //   expression: 'States.ArrayLength($.moderationResults.ModerationLabels)',
+    //   resultPath: '$.moderationLabelsCount'
+    // })
 
     // Task: Content moderation (using Rekognition)
     const detectFaces = new tasks.CallAwsService(this, 'DetectFaces', {
@@ -734,7 +745,6 @@ export class Ab3Stack extends cdk.Stack {
       },
       expressionAttributeValues: {
         ':status': tasks.DynamoAttributeValue.fromString('complete'),
-        ':results': tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt('$.moderationResults')),
       },
     });
 
@@ -742,7 +752,7 @@ export class Ab3Stack extends cdk.Stack {
     const kidsWithInappropriateContent = sfn.Condition.and(
       sfn.Condition.stringEquals('$.record.businessUnit', 'kids'),
       // sfn.Condition.isPresent('$.moderationResults.ModerationLabels[0]') // if any moderationLabels exist, it's inappropriate!
-      sfn.Condition.numberGreaterThan('$.moderationLabelCount', 0) // if any moderationLabels exist, it's inappropriate!
+      sfn.Condition.numberGreaterThan('$.moderationLabelsCount', 0) // if any moderationLabels exist, it's inappropriate!
     );
 
     // Step Function
@@ -751,13 +761,24 @@ export class Ab3Stack extends cdk.Stack {
         .start(updateStatusInit)
         .next(resizeTask)
         .next(detectModerationLabels)
-        // .next(countModerationLabels)
-        .next(detectFaces)
-        .next(smartCropTask)
-        // .next(censorshipTask)
-        .next(new sfn.Choice(this, 'EvaluateModeration')
+        .next(countTask)
+        .next(new sfn.Choice(this, 'Is not kid-friendly?')
           .when(kidsWithInappropriateContent, updateStatusRejected)
-          .otherwise(updateStatusComplete)),
+          .otherwise(detectFaces
+            .next(smartCropTask)
+            .next(new sfn.Choice(this, 'Is inappropriate?')
+              .when(sfn.Condition.numberGreaterThan('$.moderationLabelsCount', 0), censorshipTask)
+              .afterwards()
+            )
+            .next(updateStatusComplete)
+          )
+        )
+        // .next(detectFaces)
+        // .next(smartCropTask)
+        // .next(new sfn.Choice(this, 'Is inappropriate?')
+          // .when(sfn.Condition.numberGreaterThan('$.moderationLabelsCount', 0), censorshipTask))
+        // .next(updateStatusComplete)
+
     });
     stateMachine.grantStartExecution(initializeProcessingLambda);
     initializeProcessingLambda.addEnvironment('STATE_MACHINE_ARN', stateMachine.stateMachineArn);
