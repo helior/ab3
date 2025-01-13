@@ -114,8 +114,9 @@ export class Ab3Stack extends cdk.Stack {
     const originalS3Bucket = new s3.Bucket(this, "original-s3-bucket", {
       bucketName: `original-${env}`,
       lifecycleRules: [{
-        expiration: cdk.Duration.days(10),
+        expiration: cdk.Duration.days(10),  // for demo-cleanliness
         abortIncompleteMultipartUploadAfter: cdk.Duration.days(1),
+        noncurrentVersionExpiration: cdk.Duration.days(2),
       }],
       blockPublicAccess: {
         blockPublicAcls: true,
@@ -699,6 +700,24 @@ export class Ab3Stack extends cdk.Stack {
     //   resultPath: '$.moderationLabelsCount'
     // })
 
+
+    // Invoke Bedrock for something (https://docs.aws.amazon.com/cdk/api/v2/python/aws_cdk.aws_stepfunctions_tasks/README.html#invokemodel)
+// import aws_cdk.aws_bedrock as bedrock
+// model = bedrock.FoundationModel.from_foundation_model_id(self, "Model", bedrock.FoundationModelIdentifier.AMAZON_TITAN_TEXT_G1_EXPRESS_V1)
+// task = tasks.BedrockInvokeModel(self, "Prompt Model",
+//     model=model,
+//     body=sfn.TaskInput.from_object({
+//         "input_text": "Generate a list of five first names.",
+//         "text_generation_config": {
+//             "max_token_count": 100,
+//             "temperature": 1
+//         }
+//     }),
+//     result_selector={
+//         "names": sfn.JsonPath.string_at("$.Body.results[0].outputText")
+//     }
+// )
+
     // Task: Content moderation (using Rekognition)
     const detectFaces = new tasks.CallAwsService(this, 'DetectFaces', {
       service: 'rekognition',
@@ -770,6 +789,17 @@ export class Ab3Stack extends cdk.Stack {
     stateMachine.grantStartExecution(initializeProcessingLambda);
     initializeProcessingLambda.addEnvironment('STATE_MACHINE_ARN', stateMachine.stateMachineArn);
     originalS3Bucket.grantReadWrite(stateMachine)
+
+
+
+
+
+
+
+
+
+
+
 
 
     // dynamicRequestTransformationLambda.addToRolePolicy(new iam.PolicyStatement({

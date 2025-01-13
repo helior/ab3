@@ -25,7 +25,7 @@ cdk destroy
 aws s3 cp s3://image-processor-ap-1qnajnu11hzp81rsryt95xw4use1a--ol-s3/slam.png ./localslam.png
 
 # Generate Presigned URL for Object Lambda Access Point
-aws s3 presign s3://image-processor-ap-1qnajnu11hzp81rsryt95xw4use1a--ol-s3/slam.png --expires=518400
+aws s3 presign s3://image-processor-ap-1qnajnu11hzp81rsryt95xw4use1a--ol-s3/slam.png --expires=60
 
 
 # Deploy lambda functions faster

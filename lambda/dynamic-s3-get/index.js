@@ -5,28 +5,31 @@ import sharp from 'sharp';
 const s3 = new S3();
 
 function createWatermark() {
-  const timestamp = new Date().toISOString();
+  const timestamp = new Date().toLocaleString("en-US", {timeZone: "America/Los_Angeles"});
   return Buffer.from(
-    `<svg height="50" width="200"><text x="10" y="30" font-size="12" fill="white">${timestamp}</text></svg>`
+    `<svg height="50" width="200"><text x="10" y="10" font-size="14" fill="white">${timestamp}</text></svg>`
   );
 }
 
 exports.handler = async (event) => {
-  // console.log('⭐️ Dynamic S3 Get Event:', JSON.stringify(event, null, 2));
+  console.log('⭐️ Dynamic S3 Get Event:', JSON.stringify(event, null, 2));
   const { getObjectContext } = event;
   const { outputRoute, outputToken, inputS3Url } = getObjectContext;
 
   try {
     const originalObject = await axios.get(inputS3Url, { responseType: 'arraybuffer' });
+    console.log('⭐️ originalObject', originalObject)
 
     // Resize the image.
     const resized = await sharp(originalObject.data)
       .resize(256, 256, { // ❗️TODO: Resize based on device-type!!
         fit: 'inside',
-        withoutEnlargement: true,
+        // withoutEnlargement: true,
       })
       .composite([{ input: createWatermark(), gravity: "south" }])
       .toBuffer();
+
+      console.log('⭐️resized', resized)
 
     await s3.writeGetObjectResponse({
       RequestRoute: outputRoute,
