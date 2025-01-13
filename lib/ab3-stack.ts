@@ -438,6 +438,10 @@ export class Ab3Stack extends cdk.Stack {
       actions: ['s3-object-lambda:WriteGetObjectResponse'],
       resources: ['*'],
     }));
+    dynamicS3GetLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['ssm:GetParameter', 'ssm:GetParameters'],
+      resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/image-processor/*`],
+    }));
 
     /**
      * S3 Object Lambda Access Point
