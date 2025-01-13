@@ -146,7 +146,30 @@ export class Ab3Stack extends cdk.Stack {
       bucket: originalS3Bucket.bucketName,
       name: 'original-ap',
     });
-
+// TODO: Apply policy via CDK
+// {
+//     "Version": "2012-10-17",
+//     "Id": "default",
+//     "Statement": [
+//         {
+//             "Sid": "s3objlambda",
+//             "Effect": "Allow",
+//             "Principal": {
+//                 "Service": "cloudfront.amazonaws.com"
+//             },
+//             "Action": "s3:*",
+//             "Resource": [
+//                 "arn:aws:s3:us-east-1:373284358096:accesspoint/original-ap",
+//                 "arn:aws:s3:us-east-1:373284358096:accesspoint/original-ap/object/*"
+//             ],
+//             "Condition": {
+//                 "ForAnyValue:StringEquals": {
+//                     "aws:CalledVia": "s3-object-lambda.amazonaws.com"
+//                 }
+//             }
+//         }
+//     ]
+// }
 
     /**
      * DynamoDB
@@ -432,8 +455,30 @@ export class Ab3Stack extends cdk.Stack {
             },
           },
         }],
+        cloudWatchMetricsEnabled: true,
       },
     });
+
+    // TODO: Apply permissions via CDK
+  //   {
+  //     "Version": "2012-10-17",
+  //     "Statement": [
+  //         {
+  //             "Effect": "Allow",
+  //             "Principal": {
+  //                 "Service": "cloudfront.amazonaws.com"
+  //             },
+  //             "Action": "s3-object-lambda:Get*",
+  //             "Resource": "arn:aws:s3-object-lambda:us-east-1:373284358096:accesspoint/image-processor-ap",
+  //             "Condition": {
+  //                 "StringEquals": {
+  //                     "aws:SourceArn": "arn:aws:cloudfront::373284358096:distribution/E2CIGKL4Z45X1F"
+  //                 }
+  //             }
+  //         }
+  //     ]
+  // }
+
     // Pre-signed URL for S3 Object Lambda Access Point
     const getPresignedImageURLLambda = new lambda.Function(this, 'GetPresignedImageURLHandler', {
       runtime: lambda.Runtime.PYTHON_3_12,
@@ -501,15 +546,15 @@ export class Ab3Stack extends cdk.Stack {
         /**
      * CloudFront
      */
-    // // Create Origin Access Control
-    // const oac = new cloudfront.CfnOriginAccessControl(this, 'OriginAccessControl', {
-    //   originAccessControlConfig: {
-    //     name: 'ImageBucketOAC',
-    //     originAccessControlOriginType: 's3',
-    //     signingBehavior: 'always',
-    //     signingProtocol: 'sigv4'
-    //   }
-    // });
+    // Create Origin Access Control
+    const oac = new cloudfront.CfnOriginAccessControl(this, 'OriginOLAPAccessControl', {
+      originAccessControlConfig: {
+        name: 'ImageProcessingOAC',
+        originAccessControlOriginType: 's3',
+        signingBehavior: 'always',
+        signingProtocol: 'sigv4'
+      }
+    });
 
     // // Create Origin Access Identity
     // const oai = new cloudfront.CfnCloudFrontOriginAccessIdentity(
