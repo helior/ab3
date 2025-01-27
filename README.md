@@ -16,7 +16,7 @@ curl -X GET 'https://1cbh6il1lh.execute-api.us-east-1.amazonaws.com/prod/getPres
 curl -X GET 'https://1cbh6il1lh.execute-api.us-east-1.amazonaws.com/prod/images/1'
 
 # Deploy via CDK
-cdk deploy --context env="one" --context urlExpiry="900" --context whitelistip="76.33.137.141,173.196.171.194"
+cdk deploy --context env="one" --context urlExpiry="900" --context whitelistip="76.33.137.141,173.196.171.194,205.251.233.182,54.183.107.205"
 
 # Destroy
 cdk destroy

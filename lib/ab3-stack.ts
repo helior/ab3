@@ -18,6 +18,7 @@ import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Runtime } from 'aws-cdk-lib/aws-lambda';
 import { join } from 'path';
 import * as path from 'path';
+import * as bedrock from 'aws-cdk-lib/aws-bedrock';
 
 export class Ab3Stack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -675,9 +676,17 @@ export class Ab3Stack extends cdk.Stack {
 
 
 
+    const model = bedrock.FoundationModel.fromFoundationModelId(this, "NovaCanvasModel", bedrock.FoundationModelIdentifier.AMAZON_NOVA_CANVAS_V1_0)
 
-
-
+    const ruinImage = new tasks.BedrockInvokeModel(this, "Ruin Image", {
+      model: model,
+      input: {
+        s3Location: {
+          bucketName: sfn.JsonPath.stringAt('$.s3.bucket'),
+          objectKey: sfn.JsonPath.stringAt('$.s3.key'),
+        },
+      }
+    })
 
     /**
      * Step-Function / tasks
@@ -824,6 +833,7 @@ export class Ab3Stack extends cdk.Stack {
       .next(resizeTask)
       .next(detectModerationLabels)
       .next(countTask)
+      .next(ruinImage)
       .next(new sfn.Choice(this, 'Is not kid-friendly?')
         .when(inappropriateForKids, updateStatusRejected)
         .otherwise(detectFaces
